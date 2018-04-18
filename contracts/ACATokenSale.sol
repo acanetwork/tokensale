@@ -55,15 +55,21 @@ contract ACATokenSale {
 
     StageInfo[] public stages;
     uint256 public currentStage = 0;
-    uint256 public maxStage = 0;
 
     bool public isFinalized = false;
+    bool public isClaimable = false;
 
     // events
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    event AdminTransferred(address indexed previousAdmin, address indexed newAdmin);
     event TokenSaleCreated(address indexed wallet, uint256 totalSupply);
     event StageAdded(uint256 openingTime, uint256 closingTime, uint256 capacity, uint256 minimumWei, uint256 maximumWei, uint256 rate);
     event TokenSaleEnabled();
+
+    event WhitelistUpdated(address indexed beneficiary, bool flag);
+    event VerificationUpdated(address indexed beneficiary, bool flag);
+    event BulkWhitelistUpdated(address[] beneficiary, bool flag);
+    event BulkVerificationUpdated(address[] beneficiary, bool flag);
 
     event TokenPurchase(address indexed purchaser, address indexed beneficiary, uint256 value, uint256 amount);
     event TokenClaimed(address indexed beneficiary, uint256 amount);
@@ -103,7 +109,7 @@ contract ACATokenSale {
     }
 
     modifier claimable {
-        require(isFinalized == true);
+        require(isFinalized == true || isClaimable == true);
         require(isGoalReached());
         _;
     }
@@ -114,7 +120,7 @@ contract ACATokenSale {
     }
 
     function isClosed() public view returns (bool) {
-        return now > stages[maxStage - 1].closing;
+        return now > stages[stages.length - 1].closing;
     }
 
     function isGoalReached() public view returns (bool) {
@@ -123,7 +129,7 @@ contract ACATokenSale {
 
     function getTotalTokenSold() public view returns (uint256) {
         uint256 sold = 0;
-        for ( uint i = 0; i < maxStage; ++i ) {
+        for ( uint i = 0; i < stages.length; ++i ) {
             sold = sold.add(stages[i].sold);
         }
 
@@ -135,7 +141,7 @@ contract ACATokenSale {
     }
 
     function getOpeningTimeByStage(uint _index) public view returns (uint256) {
-        require(_index < maxStage);
+        require(_index < stages.length);
         return stages[_index].opening;
     }
 
@@ -144,7 +150,7 @@ contract ACATokenSale {
     }
 
     function getClosingTimeByStage(uint _index) public view returns (uint256) {
-        require(_index < maxStage);
+        require(_index < stages.length);
         return stages[_index].closing;
     }
 
@@ -153,7 +159,7 @@ contract ACATokenSale {
     }
 
     function getCapacity(uint _index) public view returns (uint256) {
-        require(_index < maxStage);
+        require(_index < stages.length);
         return stages[_index].capacity;
     }
 
@@ -162,7 +168,7 @@ contract ACATokenSale {
     }
 
     function getSold(uint _index) public view returns (uint256) {
-        require(_index < maxStage);
+        require(_index < stages.length);
         return stages[_index].sold;
     }
 
@@ -171,12 +177,12 @@ contract ACATokenSale {
     }
 
     function getRate(uint _index) public view returns (uint256) {
-        require(_index < maxStage);
+        require(_index < stages.length);
         return stages[_index].rate;
     }
 
     function getRateWithoutBonus() public view returns (uint256) {
-        return stages[maxStage - 1].rate;
+        return stages[stages.length - 1].rate;
     }
 
     function getSales(address _beneficiary) public view returns (uint256) {
@@ -204,18 +210,52 @@ contract ACATokenSale {
         stages[_index].rate = _rate;
     }
 
-    
+    function setCapacity(uint _index, uint256 _capacity) onlyOwner public {
+        require(_index > currentStage);
+        require(_index < stages.length);
+
+        require(_capacity > 0);
+
+        stages[_index].capacity = _capacity;
+    }
+
+    function setClaimable(bool _claimable) onlyOwner public {
+        if ( _claimable == true ) {
+            require(isGoalReached());
+        }
+
+        isClaimable = _claimable;
+    }
+
+    function addPrivateSale(uint256 _amount) onlyOwner public {
+        require(currentStage == 0);
+        require(_amount > 0);
+        require(_amount < stages[0].capacity.sub(stages[0].sold));
+
+        stages[0].sold = stages[0].sold.add(_amount);
+    }
+
+    function subPrivateSale(uint256 _amount) onlyOwner public {
+        require(currentStage == 0);
+        require(_amount > 0);
+        require(stages[0].sold > _amount);
+
+        stages[0].sold = stages[0].sold.sub(_amount);
+    }
+
     // permission
     function setAdmin(address _newAdmin) public onlyOwner {
         require(_newAdmin != address(0x0));
         require(_newAdmin != address(this));
         require(_newAdmin != owner);
 
+        emit AdminTransferred(admin, _newAdmin);
         admin = _newAdmin;
     }
 
     function transferOwnership(address newOwner) public onlyOwner {
         require(newOwner != address(0));
+        require(newOwner != address(this));
         emit OwnershipTransferred(owner, newOwner);
         owner = newOwner;
     }
@@ -223,10 +263,10 @@ contract ACATokenSale {
     // constructor
     function ACATokenSale(
         address _wallet, 
+        address _admin,
         uint256 _totalSupply,
         uint256 _softCap,
-        uint256 _hardCap,
-        address _admin) public {
+        uint256 _hardCap) public {
         owner = msg.sender;
 
         require(_admin != address(0));
@@ -286,7 +326,7 @@ contract ACATokenSale {
         uint256 _rate) onlyOwner public {
         require(tokenSaleEnabled == false);
 
-        require(_openingTime > now);
+        // require(_openingTime > now);
         require(_closingTime > _openingTime);
 
         require(_capacity > 0);
@@ -305,6 +345,7 @@ contract ACATokenSale {
         }
 
         stages.push(StageInfo(_openingTime, _closingTime, _capacity, _minimumWei, _maximumWei, _rate, 0));
+
         emit StageAdded(_openingTime, _closingTime, _capacity, _minimumWei, _maximumWei, _rate);
     }
 
@@ -314,26 +355,23 @@ contract ACATokenSale {
 
     function enableTokenSale() onlyOwner public returns (bool) {
         require(stages.length > 0);
-        maxStage = stages.length;
-
-        tokenSaleEnabled = true;
 
         vault = new RefundVault(wallet);
 
+        tokenSaleEnabled = true;
         emit TokenSaleEnabled();
-
         return true;
     }
 
     function updateStage() public returns (uint256) {
         require(tokenSaleEnabled == true);
-        require(currentStage < maxStage);
+        require(currentStage < stages.length);
         require(now >= stages[currentStage].opening);
 
         uint256 remains = stages[currentStage].capacity.sub(stages[currentStage].sold);
         if ( now > stages[currentStage].closing ) {
             uint256 nextStage = currentStage.add(1);
-            if ( remains > 0 && nextStage < maxStage ) {
+            if ( remains > 0 && nextStage < stages.length ) {
                 stages[nextStage].capacity = stages[nextStage].capacity.add(remains);
                 remains = stages[nextStage].capacity;
             }
@@ -358,14 +396,14 @@ contract ACATokenSale {
     function finalization() internal {
         if (isGoalReached()) {
             vault.close();
-            // token.setTransferable(true);
         } else {
             vault.enableRefunds();
         }
+
     }
 
     // transaction
-    function () external payable {
+    function () public payable {
         buyTokens(msg.sender);
     }
 
@@ -407,7 +445,7 @@ contract ACATokenSale {
         // lazy execution
         uint256 remains = updateStage();
 
-        require(currentStage < maxStage);
+        require(currentStage < stages.length);
         require(now >= stages[currentStage].opening && now <= stages[currentStage].closing);
 
         require(_weiAmount >= stages[currentStage].minimumWei);
@@ -426,7 +464,12 @@ contract ACATokenSale {
     }
 
     function _deliverTokens(address _beneficiary, uint256 _tokenAmount) internal {
-        sales[_beneficiary] = sales[_beneficiary].add(_tokenAmount);
+        if ( isClaimable ) {
+            token.transferFrom(owner, _beneficiary, _tokenAmount);
+        }
+        else {
+            sales[_beneficiary] = sales[_beneficiary].add(_tokenAmount);
+        }
     }
 
     function _processPurchase(address _beneficiary, uint256 _tokenAmount) internal {
@@ -567,6 +610,8 @@ contract ACATokenSale {
         if ( whitelistBonus[_beneficiary] == false && now < whitelistBonusClosingTime ) {
             _deliverWhitelistBonus(_beneficiary);
         }
+
+        emit WhitelistUpdated(_beneficiary, true);
     }
 
     function addManyToWhitelist(address[] _beneficiaries) external onlyAdmin {
@@ -582,10 +627,14 @@ contract ACATokenSale {
         for (i = 0; i < _beneficiaries.length; i++) {
             whitelist[_beneficiaries[i]] = true;
         }
+
+        emit BulkWhitelistUpdated(_beneficiaries, true);
     }
 
     function removeFromWhitelist(address _beneficiary) external onlyAdmin {
         whitelist[_beneficiary] = false;
+
+        emit WhitelistUpdated(_beneficiary, false);
     }
 
     // kyc
@@ -595,15 +644,21 @@ contract ACATokenSale {
 
     function setAccountVerified(address _beneficiary) external onlyAdmin {
         kyclist[_beneficiary] = true;
+
+        emit VerificationUpdated(_beneficiary, true);
     }
 
     function setManyAccountsVerified(address[] _beneficiaries) external onlyAdmin {
         for (uint256 i = 0; i < _beneficiaries.length; i++) {
             kyclist[_beneficiaries[i]] = true;
         }
+
+        emit BulkVerificationUpdated(_beneficiaries, true);
     }
 
     function unverifyAccount(address _beneficiary) external onlyAdmin {
         kyclist[_beneficiary] = false;
+
+        emit VerificationUpdated(_beneficiary, false);
     }
 }
