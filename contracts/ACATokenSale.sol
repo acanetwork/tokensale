@@ -78,12 +78,7 @@ contract ACATokenSale {
     event BountyUpdated(address indexed target, bool flag, uint256 amount);
     event PurchaseReferral(address indexed beneficiary, uint256 amount);
     event StageUpdated(uint256 stage);
-    event StageCapReached(uint256 stage);
     event ReferralCapReached();
-
-    // do not use this on mainnet!
-    event LogAddress(address indexed addr);
-    event LogUint256(uint256 value);
 
     // modifiers
     modifier onlyOwner() {
@@ -93,12 +88,6 @@ contract ACATokenSale {
 
     modifier onlyAdmin() {
         require(msg.sender == owner || msg.sender == admin);
-        _;
-    }
-
-    modifier onlyWhileOpen {
-        require(tokenSaleEnabled == true);
-        require(now >= stages[currentStage].opening && now <= stages[currentStage].closing);
         _;
     }
 
@@ -190,7 +179,7 @@ contract ACATokenSale {
     }
     
     // setter
-    function setSalePeriod(uint _index, uint256 _openingTime, uint256 _closingTime) onlyOwner public {
+    function setSalePeriod(uint _index, uint256 _openingTime, uint256 _closingTime) public onlyOwner {
         require(_openingTime > now);
         require(_closingTime > _openingTime);
 
@@ -201,7 +190,7 @@ contract ACATokenSale {
         stages[_index].closing = _closingTime;        
     }
 
-    function setRate(uint _index, uint256 _rate) onlyOwner public {
+    function setRate(uint _index, uint256 _rate) public onlyOwner {
         require(_index > currentStage);
         require(_index < stages.length);
 
@@ -210,16 +199,19 @@ contract ACATokenSale {
         stages[_index].rate = _rate;
     }
 
-    function setCapacity(uint _index, uint256 _capacity) onlyOwner public {
+    function setCapacity(uint _index, uint256 _capacity) public onlyOwner {
         require(_index > currentStage);
         require(_index < stages.length);
 
         require(_capacity > 0);
+        require(_capacity < hardCap);
+        require(_minimumWei.mul(_rate) < capacity);
+        require(_maximumWei.mul(_rate) < capacity);
 
         stages[_index].capacity = _capacity;
     }
 
-    function setClaimable(bool _claimable) onlyOwner public {
+    function setClaimable(bool _claimable) public onlyOwner {
         if ( _claimable == true ) {
             require(isGoalReached());
         }
@@ -227,7 +219,7 @@ contract ACATokenSale {
         isClaimable = _claimable;
     }
 
-    function addPrivateSale(uint256 _amount) onlyOwner public {
+    function addPrivateSale(uint256 _amount) public onlyOwner {
         require(currentStage == 0);
         require(_amount > 0);
         require(_amount < stages[0].capacity.sub(stages[0].sold));
@@ -235,7 +227,7 @@ contract ACATokenSale {
         stages[0].sold = stages[0].sold.add(_amount);
     }
 
-    function subPrivateSale(uint256 _amount) onlyOwner public {
+    function subPrivateSale(uint256 _amount) public onlyOwner {
         require(currentStage == 0);
         require(_amount > 0);
         require(stages[0].sold > _amount);
@@ -349,11 +341,11 @@ contract ACATokenSale {
         emit StageAdded(_openingTime, _closingTime, _capacity, _minimumWei, _maximumWei, _rate);
     }
 
-    function setToken(ACAToken _token) onlyOwner public {
+    function setToken(ACAToken _token) public onlyOwner {
         token = _token;
     }
 
-    function enableTokenSale() onlyOwner public returns (bool) {
+    function enableTokenSale() public onlyOwner returns (bool) {
         require(stages.length > 0);
 
         vault = new RefundVault(wallet);
@@ -383,7 +375,7 @@ contract ACATokenSale {
         return remains;
     }
 
-    function finalize() onlyOwner public {
+    function finalize() public onlyOwner {
         require(isFinalized == false);
         require(isClosed());
 
@@ -420,8 +412,6 @@ contract ACATokenSale {
         _processPurchase(_beneficiary, tokens);
         emit TokenPurchase(msg.sender, _beneficiary, weiAmount, tokens);
 
-        _updatePurchasingState(_beneficiary, weiAmount);
-
         _forwardFunds();
         _postValidatePurchase(_beneficiary, weiAmount);
     }
@@ -453,7 +443,7 @@ contract ACATokenSale {
 
         uint256 amount = _getTokenAmount(_weiAmount);
 
-        require(remains > amount);
+        require(remains >= amount);
     }
 
     function _postValidatePurchase(address _beneficiary, uint256 _weiAmount) internal {
@@ -465,7 +455,7 @@ contract ACATokenSale {
 
     function _deliverTokens(address _beneficiary, uint256 _tokenAmount) internal {
         if ( isClaimable ) {
-            token.transferFrom(owner, _beneficiary, _tokenAmount);
+            require(token.transferFrom(owner, _beneficiary, _tokenAmount));
         }
         else {
             sales[_beneficiary] = sales[_beneficiary].add(_tokenAmount);
@@ -515,10 +505,6 @@ contract ACATokenSale {
         }
     }
 
-    function _updatePurchasingState(address _beneficiary, uint256 _weiAmount) internal {
-        // optional override
-    }
-
     function _forwardFunds() internal {
         vault.deposit.value(msg.value)(msg.sender);
     }
@@ -561,7 +547,7 @@ contract ACATokenSale {
     }
     function delBounty(address _address, uint256 _amount) public onlyAdmin isVerified(_address) returns (bool) {
         require(bounties[_address] >= _amount);
-        require(_amount >= bountySent);
+        require(_amount <= bountySent);
 
         bountySent = bountySent.sub(_amount);
         bounties[_address] = bounties[_address].sub(_amount);
