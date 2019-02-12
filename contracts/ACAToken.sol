@@ -120,15 +120,13 @@ contract ACAToken is ERC20 {
         return (transferable && transferLocked[_target] == false);
     }
 
-    // token related
     function totalSupply() public view returns (uint256) {
         return totalSupply_;
     }
 
-    function transfer(address _to, uint256 _value) canTransfer(msg.sender, _to) public returns (bool) {
+    function transfer(address _to, uint256 _value) public canTransfer(msg.sender, _to) returns (bool) {
         require(_value <= balances[msg.sender]);
 
-        // SafeMath.sub will throw if there is not enough balance.
         balances[msg.sender] = balances[msg.sender].sub(_value);
         balances[_to] = balances[_to].add(_value);
         emit Transfer(msg.sender, _to, _value);
